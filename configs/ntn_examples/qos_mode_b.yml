@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
+# SPDX-FileCopyrightText: Copyright (C) 2026 OCUDU contributors
+# SPDX-License-Identifier: BSD-3-Clause-Open-MPI
+
+# Restricts the logical channels of 5QI 9 to the UL HARQ processes in mode B and to the DL HARQ processes with the
+# feedback disabled, and gives the cell the processes those restrictions need. The SRBs keep mode A and the DL HARQ
+# feedback, so that the signalling does not ride the processes the DRBs are served by. Stack on top of gnb.yml:
+#   gnb -c ./gnb.yml -c sat.yml -c ntn_du.yml -c ntn_cu.yml -c qos_mode_b.yml
+
+cell_cfg:
+  pdsch:
+    # A bit set to one disables the DL HARQ feedback of that process, the leftmost bit being process 0. The first
+    # eight processes keep it for the signalling, and the rest go to the data. A UE is only given more than 16
+    # processes once it reports support for them, so both kinds sit among the first 16.
+    harq_feedback_disabled: "0x00ffffff"
+  pusch:
+    # A bit set to one puts that UL HARQ process in mode B, the leftmost bit being process 0. The first eight stay in
+    # mode A for the signalling, and the rest go to the data, within the first 16 for the same reason.
+    harq_mode_b: "0x00ffffff"
+
+qos:
+  # Configuring any entry replaces the whole built-in 5QI table rather than adding to it, so this is an example entry
+  # to merge into the single QoS configuration of the deployment, which has to carry every 5QI in use.
+  -
+    # 5QI = 9 e.g Video (Buffered Streaming)
+    # PDB = 300ms PER = 10^-6
+    five_qi: 9
+    pdcp:
+      tx:
+        sn: 18
+        discard_timer: 1500
+        status_report_required: false
+      rx:
+        sn: 18
+        t_reordering: 220
+        out_of_order_delivery: false
+    f1u_cu_up:
+      backoff_timer: 5
+    f1u_du:
+      backoff_timer: 5
+    rlc:
+      mode: am
+      am:
+        tx:
+          sn: 18
+          t-poll-retransmit: 100
+          max-retx-threshold: 32
+          poll-pdu: 16
+          poll-byte: -1
+          queue-size: 16384
+          queue-bytes: 6172672
+        rx:
+          sn: 18
+          t-reassembly: 20
+          t-status-prohibit: 10
+    mac:
+      allowed_harq_mode: mode_b
+      dl_harq_feedback: disabled

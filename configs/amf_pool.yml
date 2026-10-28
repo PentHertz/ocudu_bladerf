@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
+# SPDX-FileCopyrightText: Copyright (C) 2026 OCUDU contributors
+# SPDX-License-Identifier: BSD-3-Clause-Open-MPI
+
+
+# Example configuration file for a pool of AMFs that serve the same PLMN.
+#
+# The CU-CP selects the AMF of each new UE. A UE that sends a registered GUAMI or a 5G-S-TMSI goes to the AMF that
+# serves it. The other UEs are distributed over the AMFs, weighted by the Relative AMF Capacity of each AMF. The CU-CP
+# also weights AMFs of different AMF Sets by their capacity. When one AMF is lost, the other AMFs keep serving the PLMN.
+
+cu_cp:
+  amf:
+    addrs: 127.0.1.100
+    bind_addrs: 127.0.10.2
+    supported_tracking_areas: # List of tracking areas supported by this AMF. Note that the first PLMN is used for the Global RAN Node ID
+      - tac: 7
+        plmn_list:
+          - plmn: "00101"
+            tai_slice_support_list:
+              - sst: 1
+  extra_amfs: # List of the other AMFs of the pool.
+    - addrs: 127.0.1.101
+      bind_addrs: 127.0.10.2
+      supported_tracking_areas:
+        - tac: 7
+          plmn_list:
+            - plmn: "00101"
+              tai_slice_support_list:
+                - sst: 1

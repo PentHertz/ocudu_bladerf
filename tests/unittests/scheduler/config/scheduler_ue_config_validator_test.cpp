@@ -1,0 +1,97 @@
+// SPDX-FileCopyrightText: Copyright (C) 2021-2026 Software Radio Systems Limited
+// SPDX-FileCopyrightText: Copyright (C) 2026 OCUDU contributors
+// SPDX-License-Identifier: BSD-3-Clause-Open-MPI
+// Portions of this file may implement 3GPP specifications, which may be subject to additional licensing requirements.
+
+#include "lib/scheduler/config/du_cell_group_config_pool.h"
+#include "tests/test_doubles/scheduler/scheduler_config_helper.h"
+#include "ocudu/scheduler/config/scheduler_expert_config_factory.h"
+#include "ocudu/scheduler/config/scheduler_ue_config_validator.h"
+#include <gtest/gtest.h>
+
+using namespace ocudu;
+
+/// Checks the validation of a UE that carries a Configured Grant, which the scheduler only supports on a CP-OFDM
+/// PUSCH: both build_cg_pusch_cfg_params() and build_dci_f0_1_cg_activation() hardcode transform precoding to
+/// disabled, so validate_cg_cfg() has to refuse a UE whose configuration would turn it on.
+class cg_transform_precoding_validator_test : public ::testing::Test
+{
+protected:
+  scheduler_expert_config sched_cfg = config_helpers::make_default_scheduler_expert_config();
+
+  /// Validates a CG UE on a cell whose msg3-transformPrecoder is \c msg3_tp. The UE's configuredGrantConfig
+  /// transformPrecoder is set to \c cg_tp (absent if empty) and its dedicated pusch-Config transformPrecoder to
+  /// \c ded_tp.
+  error_type<std::string> validate(bool                             msg3_tp,
+                                   std::optional<bool>              cg_tp,
+                                   pusch_config::transform_precoder ded_tp,
+                                   cg_builder_params::cg_type       type = cg_builder_params::cg_type::type1)
+  {
+    // A new cell per call, so that a test can validate more than one combination.
+    du_cell_group_config_pool                cfg_pool;
+    sched_cell_configuration_request_message cell_req =
+        sched_config_helper::make_default_sched_cell_configuration_request();
+    cell_req.ran.init_bwp.cg_cfg                                                    = cg_builder_params{.type = type};
+    cell_req.ran.ul_cfg_common.init_ul_bwp.rach_cfg_common->msg3_transform_precoder = msg3_tp;
+
+    const cell_configuration&         cell_cfg = cfg_pool.add_cell(sched_cfg, cell_req);
+    sched_ue_creation_request_message ue_req =
+        sched_config_helper::create_default_sched_ue_creation_request(cell_req.ran);
+
+    ocudu_assert(ue_req.cfg.cells->front().ded.has_value(), "Dedicated configuration is required for this test");
+    auto& ul_cfg                                 = ue_req.cfg.cells->front().ded->serv_cell_cfg.ul_config.value();
+    ul_cfg.init_ul_bwp.pusch_cfg->trans_precoder = ded_tp;
+    ul_cfg.init_ul_bwp.cg_cfg->trans_precoder    = cg_tp;
+
+    return config_validators::validate_sched_ue_creation_request_message(ue_req, cell_cfg);
+  }
+
+  /// Checks that the validation failed because of transform precoding, so that a test cannot pass on an unrelated
+  /// validation failure.
+  static void expect_tp_failure(const error_type<std::string>& result)
+  {
+    ASSERT_FALSE(result.has_value());
+    ASSERT_NE(result.error().find("transform precoding"), std::string::npos) << result.error();
+  }
+};
+
+TEST_F(cg_transform_precoding_validator_test, cg_without_transform_precoding_is_valid)
+{
+  ASSERT_TRUE(validate(false, false, pusch_config::transform_precoder::disabled).has_value());
+}
+
+TEST_F(cg_transform_precoding_validator_test, cg_with_cg_transform_precoding_is_invalid)
+{
+  expect_tp_failure(validate(false, true, pusch_config::transform_precoder::disabled));
+}
+
+TEST_F(cg_transform_precoding_validator_test, cg_falls_back_to_msg3_transform_precoder_when_cg_field_absent)
+{
+  // With no transformPrecoder in configuredGrantConfig, msg3-transformPrecoder decides, even if the dedicated
+  // pusch-Config disables transform precoding.
+  expect_tp_failure(validate(true, std::nullopt, pusch_config::transform_precoder::disabled));
+  ASSERT_TRUE(validate(false, std::nullopt, pusch_config::transform_precoder::disabled).has_value());
+}
+
+TEST_F(cg_transform_precoding_validator_test, cg_transform_precoder_overrides_msg3_transform_precoder)
+{
+  // transformPrecoder in configuredGrantConfig set to disabled takes precedence over msg3-transformPrecoder.
+  ASSERT_TRUE(validate(true, false, pusch_config::transform_precoder::disabled).has_value());
+}
+
+TEST_F(cg_transform_precoding_validator_test, cg_type1_ignores_dedicated_transform_precoder)
+{
+  // The dedicated pusch-Config transformPrecoder applies to dynamic grants only (TS 38.214, Section 6.1.3), so a
+  // CP-OFDM Type 1 CG is valid while the dynamic PUSCH uses DFT-s-OFDM.
+  ASSERT_TRUE(validate(false, false, pusch_config::transform_precoder::enabled).has_value());
+  ASSERT_TRUE(validate(true, false, pusch_config::transform_precoder::not_set).has_value());
+}
+
+TEST_F(cg_transform_precoding_validator_test, cg_type2_requires_cp_ofdm_dynamic_pusch)
+{
+  // The Type 2 activation DCI is sized after the dedicated PUSCH waveform, which must then match the CG one.
+  constexpr auto type2 = cg_builder_params::cg_type::type2;
+  ASSERT_TRUE(validate(false, false, pusch_config::transform_precoder::disabled, type2).has_value());
+  expect_tp_failure(validate(false, false, pusch_config::transform_precoder::enabled, type2));
+  expect_tp_failure(validate(true, false, pusch_config::transform_precoder::not_set, type2));
+}
